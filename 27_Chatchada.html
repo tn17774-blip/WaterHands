@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aqua Blaster - MediaPipe Water Jet Game</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts (Kanit) -->
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;800;900&display=swap" rel="stylesheet">
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Kanit', sans-serif;
+            user-select: none;
+            overflow: hidden;
+            background-color: #031329;
+        }
+
+        .glow-water {
+            text-shadow: 0 0 12px rgba(56, 189, 248, 0.9), 0 0 24px rgba(14, 165, 233, 0.6);
+        }
+
+        .glow-fire {
+            text-shadow: 0 0 15px rgba(239, 68, 68, 0.9), 0 0 30px rgba(249, 115, 22, 0.7);
+        }
+
+        /* Glassmorphism containers */
+        .glass-panel {
+            background: rgba(8, 28, 58, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+        }
+
+        /* Custom animation for level transition overlay */
+        @keyframes levelPop {
+            0% { transform: scale(0.5); opacity: 0; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .animate-level-pop {
+            animation: levelPop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        /* Mirror webcam feed for natural hand control */
+        #webcam-video {
+            transform: scaleX(-1);
+        }
+    </style>
+</head>
+<body class="w-screen h-screen relative flex flex-col justify-between items-center text-white select-none">
+
+    <!-- Video Element (Hidden source for MediaPipe) -->
+    <video id="webcam-video" class="hidden" playsinline></video>
+
+    <!-- Main Game Canvas -->
+    <canvas id="game-canvas" class="absolute inset-0 w-full h-full z-0 block"></canvas>
+
+    <!-- HUD Header Bar -->
+    <header class="relative z-10 w-full max-w-6xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 pointer-events-none">
+        
+        <!-- Score & Level 2 Progress Bar -->
+        <div class="glass-panel p-4 rounded-2xl w-full sm:w-auto flex items-center gap-5 shadow-2xl border-cyan-500/30">
+            <div class="flex flex-col">
+                <span class="text-xs uppercase tracking-wider text-cyan-300 font-bold flex items-center gap-1">
+                    <i class="fa-solid fa-trophy text-yellow-400"></i> คะแนนสายน้ำ
+                </span>
+                <span id="score-display" class="text-3xl sm:text-4xl font-extrabold text-cyan-200 glow-water font-mono">0</span>
+            </div>
+
+            <!-- Level 2 Goal Progress -->
+            <div class="flex flex-col w-36 sm:w-48 gap-1">
+                <div class="flex justify-between text-xs text-cyan-200 font-semibold">
+                    <span>ปลดล็อก Level 2</span>
+                    <span id="progress-text">0%</span>
+                </div>
+                <div class="w-full bg-slate-900/80 rounded-full h-3 overflow-hidden p-0.5 border border-cyan-800">
+                    <div id="progress-bar" class="bg-gradient-to-r from-cyan-500 via-sky-400 to-blue-300 h-full rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center Level Status Badge -->
+        <div id="level-badge" class="glass-panel px-6 py-2.5 rounded-full flex items-center gap-3 border-cyan-400/40 shadow-lg">
+            <i id="level-icon" class="fa-solid fa-water text-cyan-300 text-xl animate-pulse"></i>
+            <span id="level-title" class="font-extrabold text-lg sm:text-xl tracking-wide text-cyan-100">LEVEL 1: ดินแดนภูเขาไฟป่าดับเพลิง</span>
+        </div>
+
+        <!-- Combo & Fire Exterminated Counter -->
+        <div class="glass-panel p-4 rounded-2xl flex items-center gap-6 shadow-2xl border-cyan-500/30">
+            <div class="flex flex-col items-center">
+                <span class="text-xs text-cyan-300/80 uppercase font-bold">คอมโบสายน้ำ</span>
+                <span id="combo-display" class="text-3xl font-extrabold text-sky-300 font-mono">x0</span>
+            </div>
+            <div class="h-8 w-px bg-cyan-900"></div>
+            <div class="flex flex-col items-center">
+                <span class="text-xs text-cyan-300/80 uppercase font-bold">ปีศาจดับเพลิง</span>
+                <span id="hit-count" class="text-3xl font-extrabold text-teal-300 font-mono">0</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Bottom Controls & Camera Status -->
+    <footer class="relative z-10 w-full max-w-4xl p-4 mb-2 flex justify-between items-center pointer-events-auto">
+        <div class="glass-panel px-4 py-2 rounded-xl flex items-center gap-3 text-xs text-cyan-200">
+            <span class="inline-block w-3 h-3 rounded-full bg-cyan-400 animate-pulse" id="camera-status-dot"></span>
+            <span id="camera-status-text">กำลังเริ่มต้นระบบกล้อง...</span>
+        </div>
+
+        <div class="flex gap-2">
+            <button id="toggle-webcam-btn" class="glass-panel hover:bg-cyan-900/40 px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition active:scale-95">
+                <i class="fa-solid fa-video text-cyan-400"></i> แสดงภาพกล้อง
+            </button>
+            <button id="sound-toggle-btn" class="glass-panel hover:bg-cyan-900/40 px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition active:scale-95">
+                <i class="fa-solid fa-volume-high text-emerald-400" id="sound-icon"></i> เสียงเปิด
+            </button>
+        </div>
+    </footer>
+
+    <!-- Start & Instruction Modal -->
+    <div id="start-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md">
+        <div class="glass-panel max-w-lg w-full p-6 sm:p-8 rounded-3xl border border-cyan-400/40 text-center shadow-2xl flex flex-col items-center gap-6">
+            <div class="w-20 h-20 bg-gradient-to-tr from-blue-600 via-cyan-400 to-sky-300 rounded-2xl flex items-center justify-center shadow-cyan-500/50 shadow-xl transform -rotate-3">
+                <i class="fa-solid fa-hand-holding-droplet text-4xl text-slate-950"></i>
+            </div>
+
+            <div>
+                <h1 class="text-3xl sm:text-4xl font-black text-cyan-300 tracking-wide mb-1 glow-water">AQUA BLASTER</h1>
+                <p class="text-sm text-cyan-100/90">ใช้มือทั้งสองข้างปล่อยสายน้ำดับปีศาจเพลิงลาวา!</p>
+            </div>
+
+            <!-- Instruction List -->
+            <div class="w-full bg-slate-900/80 rounded-2xl p-4 text-left border border-cyan-900/60 space-y-3 text-xs sm:text-sm text-slate-200">
+                <div class="flex items-start gap-3">
+                    <div class="w-7 h-7 rounded-lg bg-cyan-500/20 flex items-center justify-center text-cyan-300 font-bold shrink-0">1</div>
+                    <p>อนุญาตใช้งาน **กล้อง Webcam** เพื่อให้ระบบตรวจจับตำแหน่งมือทั้งสองข้างของคุณ</p>
+                </div>
+                <div class="flex items-start gap-3">
+                    <div class="w-7 h-7 rounded-lg bg-cyan-500/20 flex items-center justify-center text-cyan-300 font-bold shrink-0">2</div>
+                    <p>ยก **มือซ้ายและมือขวา** ขึ้นเล็งเป้าหมาย! สายน้ำและลำแสงน้ำแรงดันสูงจะพุ่งออกจากฝ่ามือเพื่อดับศัตรูไฟ</p>
+                </div>
+                <div class="flex items-start gap-3">
+                    <div class="w-7 h-7 rounded-lg bg-cyan-500/20 flex items-center justify-center text-cyan-300 font-bold shrink-0">3</div>
+                    <p>สะสมคะแนนให้ครบ <span class="text-cyan-300 font-extrabold underline">500,000 คะแนน</span> เพื่อเข้าสู่ **LEVEL 2: มหาสมุทรลาวาเดือด**</p>
+                </div>
+            </div>
+
+            <!-- Start Buttons -->
+            <div class="flex flex-col w-full gap-3">
+                <button id="start-game-btn" class="w-full py-4 bg-gradient-to-r from-cyan-500 via-sky-400 to-blue-500 hover:from-cyan-400 hover:to-blue-400 text-slate-950 font-black text-lg rounded-2xl shadow-xl hover:shadow-cyan-500/30 transition duration-200 active:scale-95 flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-play text-xl"></i> เริ่มปล่อยสายน้ำลุยเลย!
+                </button>
+                
+                <button id="mouse-mode-btn" class="text-xs text-slate-400 hover:text-cyan-300 underline py-1 transition">
+                    หรือทดลองเล่นด้วยเมาส์ / สัมผัสหน้าจอ (Mouse Mode)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Level 2 Unlocked Modal Banner -->
+    <div id="level-up-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md hidden">
+        <div class="glass-panel max-w-md w-full p-8 rounded-3xl border-2 border-cyan-400 text-center shadow-2xl flex flex-col items-center gap-4 animate-level-pop">
+            <div class="w-24 h-24 bg-gradient-to-tr from-cyan-400 to-blue-600 rounded-full flex items-center justify-center shadow-cyan-400/50 shadow-2xl animate-bounce">
+                <i class="fa-solid fa-water text-5xl text-white"></i>
+            </div>
+            
+            <span class="text-xs font-bold uppercase tracking-widest text-cyan-400">LEVEL UP UNLOCKED!</span>
+            <h2 class="text-3xl font-black text-cyan-200 glow-water">LEVEL 2: มหาสมุทรลาวาเดือด</h2>
+            <p class="text-sm text-slate-200">คุณทำคะแนนทะลุ <span class="text-cyan-300 font-bold">500,000 PTS</span> สำเร็จ!</p>
+            <p class="text-xs text-cyan-200 bg-cyan-950/60 p-3 rounded-xl border border-cyan-800">
+                เผชิญหน้ากับพญามังกรไฟและโกเลมลาวาความเร็วสูง ได้รับพลังแรงดันน้ำ x2 เท่า!
+            </p>
+
+            <button id="continue-level2-btn" class="w-full py-3.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-extrabold text-base rounded-xl shadow-lg transition active:scale-95 mt-2">
+                ลุยต่อใน LEVEL 2!
+            </button>
+        </div>
+    </div>
+
+    <!-- JavaScript Game Engine Script -->
+    <script>
+        // Procedural Audio Synthesizer for lag-free water sound effects
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+                this.enabled = true;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioCtx();
+                }
+            }
+
+            playWaterStream() {
+                if (!this.enabled || !this.ctx) return;
+                // Generate bubbling / continuous water splash synth sound
+                const bufferSize = this.ctx.sampleRate * 0.08;
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = (Math.random() * 2 - 1) * 0.3;
+                }
+
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(800 + Math.random() * 600, this.ctx.currentTime);
+                filter.Q.setValueAtTime(3, this.ctx.currentTime);
+
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.25, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                noise.start();
+            }
+
+            playExtinguish() {
+                if (!this.enabled || !this.ctx) return;
+                // Steam hiss sound when water hits fire
+                const bufferSize = this.ctx.sampleRate * 0.2;
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'highpass';
+                filter.frequency.setValueAtTime(1500, this.ctx.currentTime);
+
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                noise.start();
+            }
+
+            playLevelUp() {
+                if (!this.enabled || !this.ctx) return;
+                const freqs = [300, 400, 500, 700, 900];
+                freqs.forEach((f, idx) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(f, this.ctx.currentTime + idx * 0.07);
+
+                    gain.gain.setValueAtTime(0.3, this.ctx.currentTime + idx * 0.07);
+                    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + idx * 0.07 + 0.25);
+
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+
+                    osc.start(this.ctx.currentTime + idx * 0.07);
+                    osc.stop(this.ctx.currentTime + idx * 0.07 + 0.25);
+                });
+            }
+        }
+
+        const sound = new SoundEngine();
+
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const videoElement = document.getElementById('webcam-video');
+
+        let windowWidth = window.innerWidth;
+        let windowHeight = window.innerHeight;
+
+        function resizeCanvas() {
+            windowWidth = window.innerWidth;
+            windowHeight = window.innerHeight;
+            canvas.width = windowWidth;
+            canvas.height = windowHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Game Global State
+        const gameState = {
+            score: 0,
+            targetLevel2Score: 500000,
+            level: 1,
+            combo: 0,
+            comboTimer: null,
+            totalHits: 0,
+            isRunning: false,
+            showWebcamVideo: true,
+            mouseMode: false,
+            mousePos: { x: -100, y: -100, isShooting: false }
+        };
+
+        // MediaPipe Tracked Hands Data
+        let trackedHands = []; // Array of {x, y, radius, id}
+
+        // Water Stream Particles & Fire Steam Effects
+        let waterParticles = [];
+        let steamParticles = [];
+        let floatingTexts = [];
+
+        class WaterParticle {
+            constructor(x, y, vx, vy, size, isBeam = false) {
+                this.x = x;
+                this.y = y;
+                this.vx = vx;
+                this.vy = vy;
+                this.size = size;
+                this.alpha = 1;
+                this.isBeam = isBeam;
+                this.color = isBeam ? '#38BDF8' : (Math.random() < 0.5 ? '#0EA5E9' : '#0284C7');
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.08; // Gravity on water drops
+                this.alpha -= 0.03;
+                this.size *= 0.96;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, Math.max(1, this.size), 0, Math.PI * 2);
+                ctx.fill();
+
+                // Bright inner water sparkle
+                ctx.fillStyle = '#E0F2FE';
+                ctx.beginPath();
+                ctx.arc(this.x - this.size * 0.3, this.y - this.size * 0.3, Math.max(0.5, this.size * 0.4), 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class SteamParticle {
+            constructor(x, y) {
+                this.x = x + (Math.random() - 0.5) * 20;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = -1 - Math.random() * 2;
+                this.size = 8 + Math.random() * 12;
+                this.alpha = 0.8;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.size += 0.4;
+                this.alpha -= 0.03;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.fillStyle = 'rgba(224, 242, 254, 0.6)';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class FloatingText {
+            constructor(x, y, text, color, fontSize = 24) {
+                this.x = x;
+                this.y = y;
+                this.text = text;
+                this.color = color;
+                this.fontSize = fontSize;
+                this.alpha = 1;
+                this.velocityY = -2.5;
+            }
+
+            update() {
+                this.y += this.velocityY;
+                this.alpha -= 0.025;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.font = `900 ${this.fontSize}px 'Kanit', sans-serif`;
+                ctx.fillStyle = this.color;
+                ctx.strokeStyle = '#021024';
+                ctx.lineWidth = 4;
+                ctx.strokeText(this.text, this.x, this.y);
+                ctx.fillText(this.text, this.x, this.y);
+                ctx.restore();
+            }
+        }
+
+        // Fire Enemy Monster Class
+        class FireEnemy {
+            constructor(level = 1) {
+                this.radius = 35 + Math.random() * 25;
+                this.x = Math.random() * (windowWidth - this.radius * 2) + this.radius;
+                this.y = -this.radius - Math.random() * 100;
+                
+                const rand = Math.random();
+                if (level === 1) {
+                    if (rand < 0.5) {
+                        this.type = 'flame_slime';
+                        this.hp = 1;
+                        this.maxHp = 1;
+                        this.basePoints = 15000;
+                        this.color = '#EF4444'; // Red Fire Slime
+                        this.eyeColor = '#FEF08A';
+                        this.speedY = 2 + Math.random() * 2.5;
+                    } else if (rand < 0.85) {
+                        this.type = 'ember_spirit';
+                        this.hp = 2;
+                        this.maxHp = 2;
+                        this.basePoints = 35000;
+                        this.color = '#F97316'; // Orange Flame
+                        this.eyeColor = '#FFFFFF';
+                        this.speedY = 2.5 + Math.random() * 2;
+                    } else {
+                        this.type = 'lava_golem';
+                        this.radius *= 1.35;
+                        this.hp = 4;
+                        this.maxHp = 4;
+                        this.basePoints = 80000;
+                        this.color = '#991B1B'; // Deep Magma Golem
+                        this.eyeColor = '#FACC15';
+                        this.speedY = 1.2 + Math.random() * 1.5;
+                    }
+                } else {
+                    // Level 2 Magma Realm
+                    if (rand < 0.4) {
+                        this.type = 'inferno_flame';
+                        this.hp = 2;
+                        this.maxHp = 2;
+                        this.basePoints = 40000;
+                        this.color = '#DC2626';
+                        this.eyeColor = '#00FFFF';
+                        this.speedY = 3.5 + Math.random() * 3;
+                    } else if (rand < 0.8) {
+                        this.type = 'volcano_titan';
+                        this.radius *= 1.5;
+                        this.hp = 5;
+                        this.maxHp = 5;
+                        this.basePoints = 110000;
+                        this.color = '#7F1D1D';
+                        this.eyeColor = '#FBBF24';
+                        this.speedY = 2 + Math.random() * 2;
+                    } else {
+                        this.type = 'golden_phoenix';
+                        this.radius *= 0.85;
+                        this.hp = 1;
+                        this.maxHp = 1;
+                        this.basePoints = 160000;
+                        this.color = '#F59E0B';
+                        this.eyeColor = '#FFFFFF';
+                        this.speedY = 5.5 + Math.random() * 3;
+                    }
+                }
+
+                this.speedX = (Math.random() - 0.5) * 2.5;
+                this.hitCooldown = 0;
+                this.pulse = 0;
+            }
+
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                this.pulse += 0.1;
+
+                if (this.hitCooldown > 0) this.hitCooldown--;
+
+                // Screen edge bounces
+                if (this.x - this.radius < 0 || this.x + this.radius > windowWidth) {
+                    this.speedX *= -1;
+                }
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Flame Glow Effect
+                const flameGlow = ctx.createRadialGradient(0, 0, 5, 0, 0, this.radius * 1.4);
+                flameGlow.addColorStop(0, this.color);
+                flameGlow.addColorStop(0.7, 'rgba(239, 68, 68, 0.4)');
+                flameGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                ctx.fillStyle = flameGlow;
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * 1.4, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Fire Enemy Body (Animated flickering flames shape)
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                const spikes = 10;
+                for (let i = 0; i < spikes; i++) {
+                    const angle = (i / spikes) * Math.PI * 2;
+                    const distortion = Math.sin(this.pulse + i) * 6;
+                    const r = this.radius + distortion;
+                    const lx = Math.cos(angle) * r;
+                    const ly = Math.sin(angle) * r;
+                    if (i === 0) ctx.moveTo(lx, ly);
+                    else ctx.lineTo(lx, ly);
+                }
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#FEF08A';
+                ctx.stroke();
+
+                // Eyes
+                ctx.fillStyle = this.eyeColor;
+                ctx.beginPath();
+                ctx.arc(-this.radius * 0.3, -this.radius * 0.1, this.radius * 0.2, 0, Math.PI * 2);
+                ctx.arc(this.radius * 0.3, -this.radius * 0.1, this.radius * 0.2, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(-this.radius * 0.3, -this.radius * 0.1, this.radius * 0.08, 0, Math.PI * 2);
+                ctx.arc(this.radius * 0.3, -this.radius * 0.1, this.radius * 0.08, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Health Bar for multi-hit enemies
+                if (this.maxHp > 1) {
+                    const hpWidth = this.radius * 1.5;
+                    const hpHeight = 6;
+                    ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+                    ctx.fillRect(-hpWidth / 2, -this.radius - 16, hpWidth, hpHeight);
+
+                    ctx.fillStyle = '#38BDF8';
+                    ctx.fillRect(-hpWidth / 2, -this.radius - 16, hpWidth * (this.hp / this.maxHp), hpHeight);
+                }
+
+                ctx.restore();
+            }
+        }
+
+        let enemies = [];
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onHandResults);
+
+        // Process Hand Tracking Frames
+        function onHandResults(results) {
+            trackedHands = [];
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                results.multiHandLandmarks.forEach((landmarks, index) => {
+                    // Landmark 9: Middle Finger MCP (Palm center)
+                    // Flipped X coordinate for intuitive video mirror display
+                    const palmX = (1 - landmarks[9].x) * windowWidth;
+                    const palmY = landmarks[9].y * windowHeight;
+
+                    // Fingertip 8 (Index finger tip) for pinpoint aiming water jet
+                    const indexX = (1 - landmarks[8].x) * windowWidth;
+                    const indexY = landmarks[8].y * windowHeight;
+
+                    trackedHands.push({
+                        x: palmX,
+                        y: palmY,
+                        aimX: indexX,
+                        aimY: indexY,
+                        radius: 50,
+                        id: index
+                    });
+                });
+            }
+
+            // Update UI camera status dot
+            const statusDot = document.getElementById('camera-status-dot');
+            const statusText = document.getElementById('camera-status-text');
+            if (trackedHands.length > 0) {
+                statusDot.className = 'inline-block w-3 h-3 rounded-full bg-cyan-400 animate-ping';
+                statusText.innerText = `ตรวจพบมือ ${trackedHands.length} ข้าง (กำลังปล่อยน้ำ)`;
+            } else {
+                statusDot.className = 'inline-block w-3 h-3 rounded-full bg-sky-400 animate-pulse';
+                statusText.innerText = 'ชูมือทั้งสองข้างขึ้นหน้ากล้อง';
+            }
+        }
+
+        // Setup Webcam Stream
+        let cameraInstance = null;
+        function initCamera() {
+            cameraInstance = new Camera(videoElement, {
+                onFrame: async () => {
+                    if (gameState.isRunning && !gameState.mouseMode) {
+                        await hands.send({ image: videoElement });
+                    }
+                },
+                width: 640,
+                height: 480
+            });
+            cameraInstance.start().catch(err => {
+                console.warn("Camera access failed:", err);
+                document.getElementById('camera-status-text').innerText = 'ไม่พบกล้อง (ใช้งาน Mouse Mode แทน)';
+                enableMouseMode();
+            });
+        }
+
+        function enableMouseMode() {
+            gameState.mouseMode = true;
+            document.getElementById('camera-status-dot').className = 'inline-block w-3 h-3 rounded-full bg-blue-400';
+            document.getElementById('camera-status-text').innerText = 'โหมดเมาส์ (กดค้างเปิดน้ำ)';
+        }
+
+        window.addEventListener('mousemove', (e) => {
+            if (gameState.mouseMode) {
+                gameState.mousePos.x = e.clientX;
+                gameState.mousePos.y = e.clientY;
+            }
+        });
+
+        window.addEventListener('mousedown', () => {
+            if (gameState.mouseMode) {
+                gameState.mousePos.isShooting = true;
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (gameState.mouseMode) {
+                gameState.mousePos.isShooting = false;
+            }
+        });
+
+        // Spawn Enemy Loop
+        setInterval(() => {
+            if (gameState.isRunning && enemies.length < (gameState.level === 1 ? 7 : 11)) {
+                enemies.push(new FireEnemy(gameState.level));
+            }
+        }, 750);
+
+        // Emit Water Streams from detected hands
+        function emitWaterFromHands() {
+            let activeHands = [];
+
+            if (gameState.mouseMode) {
+                if (gameState.mousePos.isShooting || true) { // Continuous stream in mouse mode
+                    activeHands.push({
+                        x: gameState.mousePos.x,
+                        y: gameState.mousePos.y,
+                        radius: 50
+                    });
+                }
+            } else {
+                activeHands = trackedHands;
+            }
+
+            activeHands.forEach(hand => {
+                sound.playWaterStream();
+
+                // Generate multi-directional water spray & water blast particles
+                for (let i = 0; i < 6; i++) {
+                    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.2; // Upwards spray stream
+                    const speed = 8 + Math.random() * 12;
+                    waterParticles.push(new WaterParticle(
+                        hand.x + (Math.random() - 0.5) * 20,
+                        hand.y,
+                        Math.cos(angle) * speed,
+                        Math.sin(angle) * speed,
+                        6 + Math.random() * 8
+                    ));
+                }
+            });
+        }
+
+        // Check Collisions (Water Stream vs Fire Enemies)
+        function checkWaterCollisions() {
+            let activeHands = [];
+
+            if (gameState.mouseMode) {
+                activeHands.push({
+                    x: gameState.mousePos.x,
+                    y: gameState.mousePos.y,
+                    radius: 65
+                });
+            } else {
+                activeHands = trackedHands;
+            }
+
+            // 1. Direct hand proximity splash hit
+            activeHands.forEach(hand => {
+                enemies.forEach((enemy, index) => {
+                    const dx = hand.x - enemy.x;
+                    const dy = hand.y - enemy.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < hand.radius + enemy.radius && enemy.hitCooldown === 0) {
+                        applyEnemyDamage(enemy, index, hand.x, hand.y);
+                    }
+                });
+            });
+
+            // 2. Flying Water Particle hits enemy
+            for (let pIdx = waterParticles.length - 1; pIdx >= 0; pIdx--) {
+                const wp = waterParticles[pIdx];
+                for (let eIdx = enemies.length - 1; eIdx >= 0; eIdx--) {
+                    const enemy = enemies[eIdx];
+                    const dx = wp.x - enemy.x;
+                    const dy = wp.y - enemy.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < wp.size + enemy.radius && enemy.hitCooldown === 0) {
+                        waterParticles.splice(pIdx, 1);
+                        applyEnemyDamage(enemy, eIdx, wp.x, wp.y);
+                        break;
+                    }
+                }
+            }
+        }
+
+        function applyEnemyDamage(enemy, enemyIndex, hitX, hitY) {
+            enemy.hitCooldown = 6;
+            enemy.hp -= 1;
+
+            sound.playExtinguish();
+
+            // Steam Cloud Effect
+            for (let i = 0; i < 5; i++) {
+                steamParticles.push(new SteamParticle(hitX, hitY));
+            }
+
+            if (enemy.hp <= 0) {
+                // Enemy Extinguished!
+                gameState.combo++;
+                gameState.totalHits++;
+                
+                clearTimeout(gameState.comboTimer);
+                gameState.comboTimer = setTimeout(() => {
+                    gameState.combo = 0;
+                    updateHUD();
+                }, 2500);
+
+                const comboMultiplier = Math.min(10, 1 + Math.floor(gameState.combo / 3));
+                const pointsEarned = enemy.basePoints * comboMultiplier * gameState.level;
+                
+                gameState.score += pointsEarned;
+
+                // Floating Score Text
+                floatingTexts.push(new FloatingText(
+                    enemy.x, 
+                    enemy.y, 
+                    `+${pointsEarned.toLocaleString()} ${comboMultiplier > 1 ? 'x' + comboMultiplier + ' COMBO!' : ''}`,
+                    comboMultiplier > 1 ? '#38BDF8' : '#7DD3FC',
+                    26 + comboMultiplier * 2
+                ));
+
+                enemies.splice(enemyIndex, 1);
+                checkLevelProgress();
+            } else {
+                floatingTexts.push(new FloatingText(enemy.x, enemy.y, 'EXTINGUISH!', '#38BDF8', 20));
+            }
+
+            updateHUD();
+        }
+
+        function checkLevelProgress() {
+            if (gameState.score >= gameState.targetLevel2Score && gameState.level === 1) {
+                gameState.level = 2;
+                sound.playLevelUp();
+                
+                // Show Level Up Modal
+                document.getElementById('level-up-modal').classList.remove('hidden');
+                
+                // Update UI Header Badge
+                const levelTitle = document.getElementById('level-title');
+                const levelIcon = document.getElementById('level-icon');
+                const levelBadge = document.getElementById('level-badge');
+
+                levelTitle.innerText = "LEVEL 2: มหาสมุทรลาวาเดือด";
+                levelTitle.className = "font-extrabold text-lg sm:text-xl tracking-wide text-cyan-200 glow-water";
+                levelIcon.className = "fa-solid fa-water text-cyan-300 text-xl animate-bounce";
+                levelBadge.className = "glass-panel px-6 py-2.5 rounded-full flex items-center gap-3 border-cyan-400/70 shadow-cyan-900/50 shadow-xl";
+            }
+        }
+
+        function updateHUD() {
+            document.getElementById('score-display').innerText = gameState.score.toLocaleString();
+            document.getElementById('combo-display').innerText = `x${gameState.combo}`;
+            document.getElementById('hit-count').innerText = gameState.totalHits;
+
+            const pct = Math.min(100, Math.floor((gameState.score / gameState.targetLevel2Score) * 100));
+            document.getElementById('progress-bar').style.width = `${pct}%`;
+            document.getElementById('progress-text').innerText = `${pct}%`;
+        }
+
+        function renderBackground() {
+            if (gameState.level === 1) {
+                // Level 1: Fire Forest Cavern
+                const grad = ctx.createLinearGradient(0, 0, 0, windowHeight);
+                grad.addColorStop(0, '#031329');
+                grad.addColorStop(1, '#1e0a0a');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, windowWidth, windowHeight);
+
+                // Water Grid overlay lines
+                ctx.strokeStyle = 'rgba(14, 165, 233, 0.08)';
+                ctx.lineWidth = 1;
+                for (let x = 0; x < windowWidth; x += 60) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, windowHeight);
+                    ctx.stroke();
+                }
+            } else {
+                // Level 2: Boiling Lava Ocean Realm
+                const grad = ctx.createLinearGradient(0, 0, 0, windowHeight);
+                grad.addColorStop(0, '#0284C7');
+                grad.addColorStop(1, '#450a0a');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, windowWidth, windowHeight);
+
+                // Lava Glow on bottom
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+                ctx.beginPath();
+                ctx.arc(windowWidth / 2, windowHeight + 100, windowWidth * 0.8, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawWaterHands() {
+            let activeHands = [];
+
+            if (gameState.mouseMode) {
+                activeHands.push({
+                    x: gameState.mousePos.x,
+                    y: gameState.mousePos.y,
+                    radius: 50
+                });
+            } else {
+                activeHands = trackedHands;
+            }
+
+            activeHands.forEach(hand => {
+                ctx.save();
+                ctx.translate(hand.x, hand.y);
+
+                // Water Aura Ring
+                const auraGlow = ctx.createRadialGradient(0, 0, 5, 0, 0, hand.radius * 1.5);
+                auraGlow.addColorStop(0, 'rgba(56, 189, 248, 0.8)');
+                auraGlow.addColorStop(0.6, 'rgba(14, 165, 233, 0.4)');
+                auraGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+                ctx.fillStyle = auraGlow;
+                ctx.beginPath();
+                ctx.arc(0, 0, hand.radius * 1.5, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Core Hydro Emblem
+                ctx.fillStyle = '#0284C7';
+                ctx.beginPath();
+                ctx.arc(0, 0, hand.radius * 0.6, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Water Icon Font Awesome
+                ctx.fillStyle = '#E0F2FE';
+                ctx.font = `900 ${hand.radius * 0.7}px "Font Awesome 6 Free"`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('\uf043', 0, 0); // Water Drop Icon
+
+                ctx.restore();
+            });
+        }
+
+        // Main Animation Loop
+        function gameLoop() {
+            renderBackground();
+
+            // Draw Video Overlay if active
+            if (gameState.showWebcamVideo && videoElement.readyState >= 2) {
+                ctx.save();
+                ctx.globalAlpha = 0.22;
+                ctx.translate(windowWidth, 0);
+                ctx.scale(-1, 1);
+                ctx.drawImage(videoElement, 0, 0, windowWidth, windowHeight);
+                ctx.restore();
+            }
+
+            if (gameState.isRunning) {
+                // Emit continuous water from hands
+                emitWaterFromHands();
+
+                // Update & Render Fire Enemies
+                for (let i = enemies.length - 1; i >= 0; i--) {
+                    const e = enemies[i];
+                    e.update();
+                    e.draw(ctx);
+
+                    // Escaped enemies break combo
+                    if (e.y - e.radius > windowHeight) {
+                        enemies.splice(i, 1);
+                        gameState.combo = 0;
+                        updateHUD();
+                    }
+                }
+
+                // Check Collisions
+                checkWaterCollisions();
+
+                // Update & Render Water Stream Particles
+                for (let i = waterParticles.length - 1; i >= 0; i--) {
+                    const wp = waterParticles[i];
+                    wp.update();
+                    wp.draw(ctx);
+                    if (wp.alpha <= 0 || wp.size <= 0.5) waterParticles.splice(i, 1);
+                }
+
+                // Update & Render Steam Clouds
+                for (let i = steamParticles.length - 1; i >= 0; i--) {
+                    const sp = steamParticles[i];
+                    sp.update();
+                    sp.draw(ctx);
+                    if (sp.alpha <= 0) steamParticles.splice(i, 1);
+                }
+
+                // Update & Render Floating Texts
+                for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                    const ft = floatingTexts[i];
+                    ft.update();
+                    ft.draw(ctx);
+                    if (ft.alpha <= 0) floatingTexts.splice(i, 1);
+                }
+
+                // Draw Water Hydro Hands
+                drawWaterHands();
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Button Control Handlers
+        document.getElementById('start-game-btn').addEventListener('click', () => {
+            sound.init();
+            document.getElementById('start-modal').classList.add('hidden');
+            gameState.isRunning = true;
+            initCamera();
+        });
+
+        document.getElementById('mouse-mode-btn').addEventListener('click', () => {
+            sound.init();
+            document.getElementById('start-modal').classList.add('hidden');
+            gameState.isRunning = true;
+            enableMouseMode();
+        });
+
+        document.getElementById('continue-level2-btn').addEventListener('click', () => {
+            document.getElementById('level-up-modal').classList.add('hidden');
+        });
+
+        document.getElementById('toggle-webcam-btn').addEventListener('click', () => {
+            gameState.showWebcamVideo = !gameState.showWebcamVideo;
+        });
+
+        document.getElementById('sound-toggle-btn').addEventListener('click', () => {
+            sound.enabled = !sound.enabled;
+            const icon = document.getElementById('sound-icon');
+            if (sound.enabled) {
+                icon.className = 'fa-solid fa-volume-high text-emerald-400';
+            } else {
+                icon.className = 'fa-solid fa-volume-xmark text-red-400';
+            }
+        });
+
+        // Launch Game Loop
+        gameLoop();
+    </script>
+</body>
+</html>
